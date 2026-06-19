@@ -80,64 +80,14 @@ def fetch_inbox_emails(token, account_id):
     return zoho_request(url, token).get("data", [])
 
 
-def zoho_form_post(url, token, fields, method="POST"):
-    """POST with application/x-www-form-urlencoded body."""
-    data = urllib.parse.urlencode(fields).encode()
-    req = urllib.request.Request(url, data=data, method=method,
-        headers={"Authorization": f"Zoho-oauthtoken {token}",
-                 "Content-Type": "application/x-www-form-urlencoded"})
-    try:
-        with urllib.request.urlopen(req) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()
-        raise RuntimeError(f"HTTP {e.code} [{method} {url}] — {body}")
-
-
 def move_email(token, account_id, message_id, destination_folder_id):
-    """Try move strategies until one works."""
-    err1 = err2 = err3 = None
-
-    # Strategy 1: form-encoded PUT to updatemessage with mode=move
-    try:
-        url = f"{ZOHO_API_BASE}/accounts/{account_id}/updatemessage"
-        zoho_form_post(url, token, {
-            "messageId": message_id,
-            "folderId":  destination_folder_id,
-            "mode":      "move",
-        }, method="PUT")
-        return "strategy1"
-    except RuntimeError as e:
-        err1 = str(e)
-        log.debug(f"Strategy 1 failed: {err1}")
-
-    # Strategy 2: POST to dedicated /messages/move endpoint with fromFolderId + toFolderId
-    try:
-        url = f"{ZOHO_API_BASE}/accounts/{account_id}/messages/move"
-        zoho_request(url, token, payload={
-            "messageId":    message_id,
-            "fromFolderId": INBOX_ID,
-            "toFolderId":   destination_folder_id,
-        }, method="POST")
-        return "strategy2"
-    except RuntimeError as e:
-        err2 = str(e)
-        log.debug(f"Strategy 2 failed: {err2}")
-
-    # Strategy 3: form-encoded POST to folder messages with mode=move
-    try:
-        url = f"{ZOHO_API_BASE}/accounts/{account_id}/folders/{INBOX_ID}/messages"
-        zoho_form_post(url, token, {
-            "messageId": message_id,
-            "folderId":  destination_folder_id,
-            "mode":      "move",
-        }, method="POST")
-        return "strategy3"
-    except RuntimeError as e:
-        err3 = str(e)
-        raise RuntimeError(
-            f"All move strategies failed.\n  S1: {err1}\n  S2: {err2}\n  S3: {err3}"
-        )
+    """Move a single email using the confirmed Zoho Mail Move Emails API."""
+    url = f"{ZOHO_API_BASE}/accounts/{account_id}/updatemessage"
+    return zoho_request(url, token, payload={
+        "mode":         "moveMessage",
+        "destfolderId": int(destination_folder_id),
+        "messageId":    [int(message_id)],
+    }, method="PUT")
 
 # ── Claude classification ─────────────────────────────────────────────────────
 
@@ -263,17 +213,13 @@ def main():
     moved_total   = 0
     folder_counts = {}
     bc_highlights = []
-    working_strategy = None
 
     for folder_name, ids in folder_groups.items():
         folder_id = FOLDERS[folder_name]
         log.info(f"📂  Moving {len(ids)} → {folder_name}...")
         for mid in ids:
             try:
-                strategy = move_email(token, account_id, mid, folder_id)
-                if working_strategy is None:
-                    working_strategy = strategy
-                    log.info(f"✅  Move {strategy} is working.")
+                move_email(token, account_id, mid, folder_id)
                 moved_total += 1
                 folder_counts[folder_name] = folder_counts.get(folder_name, 0) + 1
             except Exception as e:
