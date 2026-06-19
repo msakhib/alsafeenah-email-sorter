@@ -2,6 +2,7 @@
 """
 Al Safeenah Email Sorter — Cloud Automated Version
 Zoho Mail REST API + Claude AI for classification.
+Classification rules are loaded live from email_sorter_skill.md in this repo.
 
 GitHub Secrets required:
   ANTHROPIC_API_KEY   — Anthropic API key
@@ -24,6 +25,7 @@ log = logging.getLogger(__name__)
 INBOX_ID      = "2108081000000008014"
 ZOHO_AUTH_URL = "https://accounts.zoho.com/oauth/v2/token"
 ZOHO_API_BASE = "https://mail.zoho.com/api"
+SKILL_FILE    = os.path.join(os.path.dirname(__file__), "email_sorter_skill.md")
 
 FOLDERS = {
     "Business Critical":  "2108081000002144001",
@@ -34,6 +36,35 @@ FOLDERS = {
     "Operational":        "2108081000002148002",
     "Spam":               "2108081000000008024",
 }
+
+# ── Skill loader ──────────────────────────────────────────────────────────────
+
+CLASSIFICATION_SUFFIX = """
+---
+IMPORTANT — CLOUD AUTOMATION MODE:
+You are running as an automated script, not inside claude.ai.
+Do NOT attempt to call any MCP tools (ZohoMail_listEmails, ZohoMail_moveMessages, etc.).
+Simply apply the classification rules above to the emails listed and return your answer.
+
+Return ONLY a valid JSON array — no explanation, no markdown, no preamble:
+[{"messageId": "...", "folder": "Folder Name"}, ...]
+
+Valid folder names: Business Critical, Suppliers, Job Applications,
+Payment Remittance, Government, Operational, Spam, SKIP
+"""
+
+def load_skill():
+    """Load classification rules live from email_sorter_skill.md."""
+    if not os.path.exists(SKILL_FILE):
+        raise RuntimeError(
+            f"Skill file not found at: {SKILL_FILE}\n"
+            "Add email_sorter_skill.md to the repo alongside sort_emails.py."
+        )
+    with open(SKILL_FILE, "r", encoding="utf-8") as f:
+        content = f.read()
+    log.info(f"📋  Skill loaded ({len(content)} chars) from email_sorter_skill.md")
+    return content + CLASSIFICATION_SUFFIX
+
 
 # ── Zoho helpers ──────────────────────────────────────────────────────────────
 
@@ -81,7 +112,6 @@ def fetch_inbox_emails(token, account_id):
 
 
 def move_email(token, account_id, message_id, destination_folder_id):
-    """Move a single email using the confirmed Zoho Mail Move Emails API."""
     url = f"{ZOHO_API_BASE}/accounts/{account_id}/updatemessage"
     return zoho_request(url, token, payload={
         "mode":         "moveMessage",
@@ -89,48 +119,10 @@ def move_email(token, account_id, message_id, destination_folder_id):
         "messageId":    [int(message_id)],
     }, method="PUT")
 
+
 # ── Claude classification ─────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """
-You classify emails for Al Safeenah Engineering Services LLC — a CNC machine shop in Dubai, UAE.
-
-Assign each email to exactly ONE of these folders (or SKIP):
-  Business Critical | Suppliers | Job Applications | Payment Remittance
-  Government | Operational | Spam | SKIP
-
-Rules (first match wins):
-
-SKIP: auto-replies, out-of-office, bounced @alsafeenah.ae sent mail
-
-Spam: irrelevant products (curtains, furniture, insulation, cleaning, signage); cold IT/SEO/website/app
-  pitches; cold loans/insurance/accounting; tender platform spam; Chinese factory mass-marketing;
-  scams/phishing; mass manpower with no specific role
-
-Payment Remittance: subject has "remittance", "payment advice", "payment confirmation"
-
-Government: PCFC, pcfc.ae, govt authority, municipality, ministry; subject has "circular",
-  "regulatory", "e-invoicing", "VAT", "trade licence"
-
-Job Applications: CV, resume, vacancy, career, applying for, seeking employment;
-  recruitment agency with a specific role
-
-Suppliers: relevant engineering supplier — cutting tools, steel, raw materials, calibration;
-  known brands: Guehring, Sandvik, Kennametal, Iscar, Ceratizit, Seco, TruCut
-
-Operational: zoho.com, microsoft.com, yellowpages-uae.net sender; system alerts;
-  login notifications; logistics updates; internal @alsafeenah.ae
-
-Business Critical (DEFAULT — when in doubt, always use this):
-  RFQ, enquiry, inquiry, quotation, please quote, tender; machining keywords (gear, roller, shaft,
-  flange, bushing, bearing, coupling, pipe spool, CNC, milling, welding, fitting, bollard, hydraulic);
-  active client threads, POs, delivery notes, invoices, MTC requests
-
-Return ONLY a JSON array — no explanation, no markdown:
-[{"messageId": "...", "folder": "Folder Name"}, ...]
-"""
-
-
-def classify_emails(emails, api_key):
+def classify_emails(emails, api_key, skill_content):
     if not emails:
         return []
     lines = [
@@ -140,8 +132,8 @@ def classify_emails(emails, api_key):
     ]
     body = json.dumps({
         "model": "claude-sonnet-4-6", "max_tokens": 4096,
-        "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": "Classify:\n\n" + "\n---\n".join(lines)}],
+        "system": skill_content,
+        "messages": [{"role": "user", "content": "Classify these emails:\n\n" + "\n---\n".join(lines)}],
     }).encode()
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages", data=body, method="POST",
@@ -171,6 +163,12 @@ def main():
     log.info("🚀  Al Safeenah Email Sorter starting...")
     log.info(f"📅  {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
 
+    # Load skill file
+    try:
+        skill_content = load_skill()
+    except Exception as e:
+        log.error(str(e)); sys.exit(1)
+
     log.info("🔑  Getting Zoho access token...")
     try:
         token = get_access_token(client_id, client_secret, refresh_token)
@@ -195,10 +193,10 @@ def main():
     if not emails:
         print("\n✅  Inbox already empty.\n"); return
 
-    log.info("🤖  Classifying with Claude...")
+    log.info("🤖  Classifying with Claude (using live skill rules)...")
     try:
-        classifications = classify_emails(emails, api_key)
-        log.info(f"✅  {len(classifications)} classified.")
+        classifications = classify_emails(emails, api_key, skill_content)
+        log.info(f"✅  {len(classifications)} emails classified.")
     except Exception as e:
         log.error(f"Classification failed: {e}"); sys.exit(1)
 
