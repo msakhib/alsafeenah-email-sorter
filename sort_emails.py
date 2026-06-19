@@ -101,12 +101,11 @@ def fetch_inbox_emails(token, account_id):
     return zoho_get(url, token).get("data", [])
 
 
-def move_email_batch(token, account_id, message_ids, destination_folder_id):
-    url = f"{ZOHO_API_BASE}/accounts/{account_id}/updatemessage"
+def move_single_email(token, account_id, message_id, destination_folder_id):
+    """Move one email by updating its folderId directly."""
+    url = f"{ZOHO_API_BASE}/accounts/{account_id}/folders/{INBOX_ID}/messages/{message_id}"
     return zoho_post(url, token, {
-        "messageId": message_ids,
-        "folderId":  destination_folder_id,
-        "mode":      "move",
+        "folderId": destination_folder_id,
     }, method="PUT")
 
 
@@ -287,14 +286,13 @@ def main():
     for folder_name, ids in folder_groups.items():
         folder_id = FOLDERS[folder_name]
         log.info(f"📂  Moving {len(ids)} → {folder_name}...")
-        for i in range(0, len(ids), 10):
-            batch = ids[i:i+10]
+        for mid in ids:
             try:
-                move_email_batch(token, account_id, batch, folder_id)
-                moved_total += len(batch)
-                folder_counts[folder_name] = folder_counts.get(folder_name, 0) + len(batch)
+                move_single_email(token, account_id, mid, folder_id)
+                moved_total += 1
+                folder_counts[folder_name] = folder_counts.get(folder_name, 0) + 1
             except Exception as e:
-                log.warning(f"Move batch failed ({folder_name}): {e}")
+                log.warning(f"Failed to move {mid} to {folder_name}: {e}")
 
         if folder_name == "Business Critical":
             for mid in ids:
