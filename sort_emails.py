@@ -82,16 +82,18 @@ def fetch_inbox_emails(token, account_id):
 
 def move_email(token, account_id, message_id, destination_folder_id):
     """Try three move strategies in order until one works."""
+    err1 = err2 = err3 = None
 
-    # Strategy 1: PUT updatemessage without mode (batch-style, no mode field)
+    # Strategy 1: PUT updatemessage without mode
     try:
         url = f"{ZOHO_API_BASE}/accounts/{account_id}/updatemessage"
         zoho_request(url, token,
                      payload={"messageId": [message_id], "folderId": destination_folder_id},
                      method="PUT")
         return "strategy1"
-    except RuntimeError as e1:
-        log.debug(f"Strategy 1 failed: {e1}")
+    except RuntimeError as e:
+        err1 = str(e)
+        log.debug(f"Strategy 1 failed: {err1}")
 
     # Strategy 2: PUT to folder/messages/{messageId} with folderId in body
     try:
@@ -100,8 +102,9 @@ def move_email(token, account_id, message_id, destination_folder_id):
                      payload={"folderId": destination_folder_id},
                      method="PUT")
         return "strategy2"
-    except RuntimeError as e2:
-        log.debug(f"Strategy 2 failed: {e2}")
+    except RuntimeError as e:
+        err2 = str(e)
+        log.debug(f"Strategy 2 failed: {err2}")
 
     # Strategy 3: POST to folder/messages/{messageId} with mode and folderId
     try:
@@ -110,9 +113,10 @@ def move_email(token, account_id, message_id, destination_folder_id):
                      payload={"mode": "move", "folderId": destination_folder_id},
                      method="POST")
         return "strategy3"
-    except RuntimeError as e3:
+    except RuntimeError as e:
+        err3 = str(e)
         raise RuntimeError(
-            f"All move strategies failed.\n  S1: {e1}\n  S2: {e2}\n  S3: {e3}"
+            f"All move strategies failed.\n  S1: {err1}\n  S2: {err2}\n  S3: {err3}"
         )
 
 # ── Claude classification ─────────────────────────────────────────────────────
